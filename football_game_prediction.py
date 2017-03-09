@@ -48,9 +48,9 @@ def get_match_label(match):
     #Return label        
     return label.loc[0]
     
-def get_fifa_stats(match, player_stats):
+def get_fifa_stats(match, player_stats, team_stats):
     ''' Aggregates fifa stats for a given match. '''    
-    
+    #print "here1"
     #Define variables
     match_id =  match.match_api_id
     date = match['date']
@@ -59,6 +59,7 @@ def get_fifa_stats(match, player_stats):
                "home_player_11", "away_player_1", "away_player_2", "away_player_3", "away_player_4",
                "away_player_5", "away_player_6", "away_player_7", "away_player_8", "away_player_9",
                "away_player_10", "away_player_11"]
+    teams = ['home_team_api_id', 'away_team_api_id']
     player_stats_new = pd.DataFrame()
     names = []
     
@@ -87,15 +88,36 @@ def get_fifa_stats(match, player_stats):
         #Aggregate stats
         player_stats_new = pd.concat([player_stats_new, overall_rating], axis = 1)
     
+    #print "here2"
+    team_attrs = ['buildUpPlaySpeed','buildUpPlayDribbling','buildUpPlayPassing','chanceCreationPassing','chanceCreationCrossing',
+                    'chanceCreationShooting','defencePressure','defenceAggression','defenceTeamWidth']
+    for team in teams:
+        team_id = match[team]
+        stats = team_stats[team_stats.team_api_id == team_id]
+        current_stats = stats[stats.date < date].sort_values(by = 'date', ascending = False)[:1]
+        if np.isnan(team_id) == True or current_stats.empty:
+            for attr in team_attrs:
+                attr_tmp = pd.Series(0)
+                name = "{}_{}".format(team, attr)
+                names.append(name)
+                player_stats_new = pd.concat([player_stats_new, attr_tmp], axis = 1)
+        else:
+            current_stats.reset_index(inplace = True, drop = True)
+            for attr in team_attrs:
+                attr_tmp = pd.Series(current_stats.loc[0, attr])
+                name = "{}_{}".format(team, attr)
+                names.append(name)
+                player_stats_new = pd.concat([player_stats_new, attr_tmp], axis = 1)
+    
     player_stats_new.columns = names        
     player_stats_new['match_api_id'] = match_id
 
     player_stats_new.reset_index(inplace = True, drop = True)
-    
+    #print player_stats_new.ix[0]     
     #Return player stats    
     return player_stats_new.ix[0]     
       
-def get_fifa_data(matches, player_stats, path = None, data_exists = False):
+def get_fifa_data(matches, player_stats, team_stats, path = None, data_exists = False):
     ''' Gets fifa data for all matches. '''  
     
     #Check if fifa data already exists
@@ -109,7 +131,7 @@ def get_fifa_data(matches, player_stats, path = None, data_exists = False):
         start = time()
         
         #Apply get_fifa_stats for each match
-        fifa_data = matches.apply(lambda x :get_fifa_stats(x, player_stats), axis = 1)
+        fifa_data = matches.apply(lambda x :get_fifa_stats(x, player_stats, team_stats), axis = 1)
         
         end = time()    
         print("Fifa data collected in {:.1f} minutes".format((end - start)/60))
@@ -149,6 +171,20 @@ def get_last_matches(matches, date, team, x = 10):
     
     #Return last matches
     return last_matches
+
+def get_last_match_date(matches, date, team):
+    ''' Get the last matche date of two teams. '''
+    
+    #Filter team matches from matches
+    team_matches = matches[(matches['home_team_api_id'] == team) | (matches['away_team_api_id'] == team)]
+                           
+    #Filter x last matches from team matches
+    last_matches = team_matches[team_matches.date < date].sort_values(by = 'date', ascending = False)
+    
+    if last_matches.empty:
+        return 0
+    else:
+        return last_matches.iloc[0].date
     
 def get_last_matches_against_eachother(matches, date, home_team, away_team, x = 10):
     ''' Get the last x matches of two given teams. '''
@@ -219,6 +255,9 @@ def get_match_features(match, matches, x = 10):
     matches_home_team = get_last_matches(matches, date, home_team, x = 10)
     matches_away_team = get_last_matches(matches, date, away_team, x = 10)
     
+    lastmatch_home = get_last_match_date(matches, date, home_team)
+    lastmatch_away = get_last_match_date(matches, date, away_team)
+    
     #Get last x matches of both teams against each other
     last_matches_against = get_last_matches_against_eachother(matches, date, home_team, away_team, x = 3)
     
@@ -243,6 +282,10 @@ def get_match_features(match, matches, x = 10):
     result.loc[0, 'games_against_won'] = get_wins(last_matches_against, home_team)
     result.loc[0, 'games_against_lost'] = get_wins(last_matches_against, away_team)
     
+    #print lastmatch_home
+    result.loc[0, 'last_match_date_home'] = lastmatch_home
+    result.loc[0, 'last_match_date_away'] = lastmatch_away
+    
     #Return match features
     return result.loc[0]
     
@@ -250,8 +293,8 @@ def create_feables(matches, fifa, bookkeepers, get_overall = False, horizontal =
     ''' Create and aggregate features and labels for all matches. '''
 
     #Get fifa stats features
-    fifa_stats = get_overall_fifa_rankings(fifa, get_overall)
-    
+    #fifa_stats = get_overall_fifa_rankings(fifa, get_overall)
+    fifa_stats = fifa
     
     if verbose == True:
         print("Generating match features...")
@@ -291,12 +334,15 @@ def create_feables(matches, fifa, bookkeepers, get_overall = False, horizontal =
         print("Bookkeeper data generated in {:.1f} minutes".format((end - start)/60))
 
     #Merges features and labels into one frame
+    #fifa_stats.to_csv('11.csv')
     features = pd.merge(match_stats, fifa_stats, on = 'match_api_id', how = 'left')
+    #features.to_csv('12.csv')
     features = pd.merge(features, bk_data, on = 'match_api_id', how = 'left')
+    #features.to_csv('13.csv')
     feables = pd.merge(features, labels, on = 'match_api_id', how = 'left')
     
     #Drop NA values
-    feables.dropna(inplace = True)
+    #feables.dropna(inplace = True)
     
     #Return preprocessed data
     return feables
@@ -839,12 +885,13 @@ def plot_bookkeeper_cf_matrix(matches, bookkeepers, path, verbose = False, norma
     #Print classification report and accuracy score of bookkeepers
     print(classification_report(y_test, y_pred)) 
     print("Bookkeeper score for test set: {:.4f}.".format(accuracy_score(y_test, y_pred)))
-In [3]:
+
+################################################################
+
 start = time()
 ## Fetching data
 #Connecting to database
-path = "../input/"  #Insert path here
-database = path + 'database.sqlite'
+database = 'database.sqlite'
 conn = sqlite3.connect(database)
 
 #Defining the number of jobs to be run in parallel during grid search
@@ -855,23 +902,13 @@ player_data = pd.read_sql("SELECT * FROM Player;", conn)
 player_stats_data = pd.read_sql("SELECT * FROM Player_Attributes;", conn)
 team_data = pd.read_sql("SELECT * FROM Team;", conn)
 match_data = pd.read_sql("SELECT * FROM Match;", conn)
-
-#Reduce match data to fulfill run time requirements
-rows = ["country_id", "league_id", "season", "stage", "date", "match_api_id", "home_team_api_id", 
-        "away_team_api_id", "home_team_goal", "away_team_goal", "home_player_1", "home_player_2",
-        "home_player_3", "home_player_4", "home_player_5", "home_player_6", "home_player_7", 
-        "home_player_8", "home_player_9", "home_player_10", "home_player_11", "away_player_1",
-        "away_player_2", "away_player_3", "away_player_4", "away_player_5", "away_player_6",
-        "away_player_7", "away_player_8", "away_player_9", "away_player_10", "away_player_11"]
-match_data.dropna(subset = rows, inplace = True)
-match_data = match_data.tail(1500)
+team_data_attr = pd.read_sql("SELECT * FROM Team_Attributes;", conn)
 
 ################################################################
 
 ## Generating features, exploring the data, and preparing data for model training
 #Generating or retrieving already existant FIFA data
-fifa_data = get_fifa_data(match_data, player_stats_data, data_exists = False)
-
+fifa_data = get_fifa_data(match_data, player_stats_data, team_data_attr, data_exists = False)
 #Creating features and labels based on data provided
 bk_cols = ['B365', 'BW', 'IW', 'LB', 'PS', 'WH', 'SJ', 'VC', 'GB', 'BS']
 bk_cols_selected = ['B365', 'BW']      
@@ -882,6 +919,9 @@ inputs = feables.drop('match_api_id', axis = 1)
 labels = inputs.loc[:,'label']
 features = inputs.drop('label', axis = 1)
 features.head(5)
+features.to_csv('alldata.csv')
+labels.to_csv('alllabel.csv')
+path = "../input/" 
 feature_details = explore_data(features, inputs, path)
 
 #Splitting the data into Train, Calibrate, and Test data sets
